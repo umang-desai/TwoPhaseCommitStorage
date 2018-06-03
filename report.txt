@@ -1,0 +1,88 @@
+Umang Desai
+
+Report:
+
+1) Describe the structure of your code, including any major interfaces that you implemented
+--> 
+Project contains the following files:
+- Client.java: Launches the client.
+- DataStoreAccess.java: Handles the final execution of SQL queries on the database.
+- Master.java: This is the master server(coordinator). Replicas and client will connect to this class. This processes all the request. 
+- MasterInterface.java: Contains the methods of Master class which are to be exposed to the client and replica.
+- Replica.java: This is the replica class which as the name suggests instantiates a replica.
+- ReplicaInterface.java: Contains the methods of Replica class which are to be exposed to the master.
+- ReplicaRegistry.java: Holds connection of all replicas for the master.
+- RMIFactory.java: Helper class to create remote objects.
+
+- sqlite-jdbc-3.21.0.jar: jar file which helps connection to sqlite database.
+
+- Extra Files: There could possible be some .db files but we don't necessarily need them BEFORE we begin the program. We can just mention the db name in the command line argument and the program will create the database and tables for you, if you wish for a clean db to work with.
+
+- Log files: Two log files are generated for each replica and master. The name you provide for log file in the command line arguments is prefixed with staging_ and commit_ to create the two log files. staging_ logs the transactions of the first phase(canCommit?) of the commit. commit_ logs the transactions of the second phase(doCommit!). These are used for recovery if a replica crashes and was not able to log/execute the second phase of 2PC. 
+These log files are generated automatically. 
+
+The code begins with the client from the users perspective. The client sends requests to the master, who then depending on the request chooses what action to take. The methods exposed by the master to client are get, put and del. 
+
+The master communicates with the replicas and processes the request returning the results to the client. If a key is in a state changing transaction then no other state changing transaction is permitted till the current one is finished. This is achieved by keeping track of the keys in a simple list. 
+
+The code supports concurrent request from multiple clients. This includes state changing requests too (as long as two transactions don't try manipulating the same key at the same time, in this situation the first transaction is executed and the other is aborted. 
+
+
+2) Describe and justify the RPC interface your replicas expose to the master.
+-->
+The replicas expose 4 methods to the master. 
+canCommit : This method is used by the master to initiate phase one of 2PC.
+doCommit: This method is used by the master to alert all the replicas that the transaction sent in phase one should be committed.
+doAbort: This method is used by the master to alert all the replicas that the transaction sent in phase one should be aborted.
+get: This lets the master query a key in the replica database and return a value, if found, back to the client. 
+
+I did not use put and get as interface methods as canCommit and doCommit encapsulate them in their process.
+
+
+3) How do you detect failures? if failures do occur, how are those reflected to clients via the RPC interface that the master exposes, if at all?
+--> 
+So we have exposed three methods to the client. Get, Put, Del are those commands. 
+Incase of get, an exception is thrown only when the master is down. In this case, it will try reconnecting to the master every 3 seconds. When the replicas are down it is ok for this method to send requests as the master takes over if there are no replicas available.
+
+For put and del, if the master is down, it will do the same as above and try reconnecting to the master every 3 seconds. If a replica is down, it will just abort the transactions. 
+
+If there is an error in the command itself, then the user is shown a message suggesting the proper syntax. 
+
+
+4) What interesting test cases did you explore, and why did you pick those?
+--> Client1 = C1, Client2 = C2, Master = M, Replica1 = R1, Replica2 = R2, Replica3 = R3
+ 
+Scenario 1: Happy Path test case. All working fine. 
+All are working. And the client is able to get, put, del in random combinations and finds that the database is always consistent with its commands. I used random values to {put, get, del, get} a key. This made sure that the keys being inserted are retrieved and that deleted keys cannot be retrieved.
+
+Scenario 2: Crash one or more replicas and get them online again, system works just like before. 
+All are working, we execute some commands to fill the database with key/value pairs. We now crash one of the replicas. We will find that client, master and the rest of the replicas are stil working. In this scenario we can keep using the get command but put and delete will simply abort the transaction as we do not have a full vote from the replicas. 
+Now, till the replica does not join back we cannot make state changing transactions as they will simply be aborted. When it comes up again the connection that master stores is reset, where the old connection is discarded and a new connection is created. The old one is to be removed as it links to an object which doesn't exist anymore (since we are using RMI), and we need a new reference.
+
+
+Scenario 3: Crash master, and bring it back up again.
+We run some commands and then crash the master.
+Here there are two side. One for the client and other for the replicas.
+The client will try and reconnect with the master every 3 seconds. When master comes up again client will have successfully formed a connection. The replicas will not react at all, as they act only on inputs(get/doCommit/canCommit/doAbort). 
+One thing I have added to the master class is the ability to store the connection info of all the RMI connections received from replicas. When it comes back up again, it will create connections for all the connection records stored and will discard the ones which are dead.
+Now if you run any commands the system should function normally.
+
+Scenario 4: Client goes down.
+If the client goes down, its ok. It doesn't do anything to the system. When the client comes back up it can resume its functionality.
+
+
+Scenario 5: Replica recovery.
+I sent a few put commands and kept the replicas on debug mode and used it to crash the replica after after it agrees 'yes' for a transaction. I assume that if a replica has logged the commit request from doCommit, it has also committed to the database. 
+
+The case I considered was if the replica votes yes for commit(at this point it has staged the transaction in staging_log.txt) and then crashes before it gets a doCommit from the master. If this happens, the replica will recover using two log files, staging_log.txt and commit_log.txt. If it finds a transaction present in the staging_log and not the commit_log then it will contact the master with the transaction ID of the transaction in question and ask for the decision that was made corresponding to that particular transaction. If it gets a response of 'commit', then it commits it or it just aborts.
+
+We do not worry about the masters recovery, because it is always consistent. If a commit is made, it is always made first in the master. there will never be a transaction whose final decision the master doesn't know about or hasn't executed (commit or abort).
+
+Also the recovery log file is wiped clean after the process of recovery is over as the database is now stable and durable we don't need the logged data anymore.
+
+
+
+There are a few more test cases and corner cases which i have taken care of but I cant remember them. There was a LOT of coding so I have sort of forgotten exactly which small features I have put in there for a better user experience. But I would be happy to meet you during office hours if you have any questions regarding my code or the report. 
+
+
+End of report.
